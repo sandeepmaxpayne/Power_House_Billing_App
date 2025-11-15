@@ -1,4 +1,5 @@
 // lib/screens/web_pos_screen.dart
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -8,6 +9,39 @@ import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/billing_excel.dart';
+
+/// ====== BUSINESS & INVOICE SETTINGS ======
+
+const String kShopName = 'Battery Zone';
+const String kShopAddress1 = 'Hullung Roas';
+const String kShopAddress2 = '';
+const String kShopPhone = '912345670';
+const String kShopEmail = 'a@bc.com';
+const String kShopWebsite = 'none';
+const String kShopGst = '1343';
+
+const String kBankAccountHolder = 'Battery';
+const String kBankName = 'SBI';
+const String kBankAccountNumber = '566556';
+const String kBankIfsc = 'birsa0001';
+const String kUpiId = ''; // optional
+
+const bool kPrintTwoCopies = false;
+const String kInvoicePrefix = 'BZ-';
+
+const bool kIncludeDigitalSignature = true;
+
+// Footer lines – you can edit these
+const String kFooterLine1 = 'This is a computer generated invoice.';
+const String kFooterLine2 = 'Thank you for your business.';
+
+String formatCurrency(double value) {
+  // ₹ 12,500.00 style
+  final f = NumberFormat('#,##,##0.00', 'en_IN');
+  return '₹ ${f.format(value)}';
+}
+
+/// =========================================
 
 class PosItem {
   PosItem({
@@ -62,12 +96,12 @@ class _WebPosScreenState extends State<WebPosScreen> {
 
   Future<void> _loadInvoiceCounter() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() => _invoiceCounter = prefs.getInt("invoice_no") ?? 1);
+    setState(() => _invoiceCounter = prefs.getInt('invoice_no') ?? 1);
   }
 
   Future<void> _saveCounter() async {
     final prefs = await SharedPreferences.getInstance();
-    prefs.setInt("invoice_no", _invoiceCounter);
+    await prefs.setInt('invoice_no', _invoiceCounter);
   }
 
   @override
@@ -100,8 +134,9 @@ class _WebPosScreenState extends State<WebPosScreen> {
     if (_items.isEmpty) return;
 
     final now = DateTime.now();
-    final invoiceNo = DateFormat('yyyyMMdd').format(now) +
-        '-${_invoiceCounter.toString().padLeft(3, '0')}';
+    final datePart = DateFormat('yyyyMMdd').format(now);
+    final invoiceNo =
+        '$kInvoicePrefix$datePart-${_invoiceCounter.toString().padLeft(3, '0')}';
 
     // --- SAVE TO EXCEL (Web / Android / Windows) ---
     await logInvoiceToExcel(
@@ -123,7 +158,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
       grandTotal: grandTotal,
     );
 
-    // --- GENERATE PDF & PRINT ---
+    // --- GENERATE PDF & PRINT (A4) ---
     final pdfBytes = await _buildPdf(
       invoiceNo: invoiceNo,
       date: now,
@@ -135,12 +170,17 @@ class _WebPosScreenState extends State<WebPosScreen> {
       grandTotal: grandTotal,
     );
 
-    await Printing.layoutPdf(onLayout: (format) async => pdfBytes);
+    // Chrome/desktop print dialog will allow "Save as PDF" as well
+    final copies = kPrintTwoCopies ? 2 : 1;
+    for (int i = 0; i < copies; i++) {
+      await Printing.layoutPdf(onLayout: (format) async => pdfBytes);
+    }
 
     setState(() {
       _invoiceCounter++;
       _items.clear(); // reset bill after printing
     });
+    await _saveCounter();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -149,7 +189,6 @@ class _WebPosScreenState extends State<WebPosScreen> {
         ),
       );
     }
-    _saveCounter();
   }
 
   Future<Uint8List> _buildPdf({
@@ -163,85 +202,256 @@ class _WebPosScreenState extends State<WebPosScreen> {
     required double grandTotal,
   }) async {
     final doc = pw.Document();
-    final currency = NumberFormat.currency(symbol: "₹", decimalDigits: 2);
+    final dateStr = DateFormat('dd/MM/yyyy').format(date);
 
     doc.addPage(
-      pw.Page(
-        margin: const pw.EdgeInsets.all(32),
-        build: (context) {
-          return pw.Column(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(24),
+        build: (context) => [
+          // ===== HEADER: LEFT BUSINESS, RIGHT INVOICE =====
+          pw.Row(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Text("INVOICE",
-                  style: pw.TextStyle(
-                      fontSize: 32, fontWeight: pw.FontWeight.bold)),
-              pw.SizedBox(height: 12),
-              pw.Text("Power Battery Zone"),
-              pw.Text("Near Loyola School"),
-              pw.Text("Phone: 91234556670"),
-              pw.SizedBox(height: 18),
-              pw.Text("Invoice Number: $invoiceNo"),
-              pw.Text("Date: ${DateFormat('dd/MM/yyyy').format(date)}"),
-              pw.Divider(height: 30),
-              pw.TableHelper.fromTextArray(
-                headerDecoration:
-                    const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE0E0E0)),
-                headers: ["Description", "Qty", "Rate", "Amount"],
-                data: [
-                  for (var it in items)
-                    [
-                      it.name,
-                      it.qty.toString(),
-                      currency.format(it.rate),
-                      currency.format(it.amount)
-                    ],
-                ],
+              pw.Expanded(
+                flex: 2,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      kShopName,
+                      style: pw.TextStyle(
+                        fontSize: 20,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                    if (kShopAddress1.isNotEmpty) pw.Text(kShopAddress1),
+                    if (kShopAddress2.isNotEmpty) pw.Text(kShopAddress2),
+                    pw.Text('Phone: $kShopPhone'),
+                    if (kShopEmail.isNotEmpty) pw.Text('Email: $kShopEmail'),
+                    if (kShopWebsite.isNotEmpty && kShopWebsite != 'none')
+                      pw.Text('Website: $kShopWebsite'),
+                    if (kShopGst.isNotEmpty) pw.Text('GSTIN: $kShopGst'),
+                  ],
+                ),
               ),
-              pw.SizedBox(height: 20),
-              pw.Row(mainAxisAlignment: pw.MainAxisAlignment.end, children: [
-                pw.Container(
-                  width: 250,
-                  child: pw.Column(children: [
-                    _pdfRow("Subtotal", currency.format(subTotal)),
-                    _pdfRow("Discount", currency.format(discount)),
-                    _pdfRow("Tax (${taxPercent.toStringAsFixed(2)}%)",
-                        currency.format(taxAmount)),
-                    pw.Divider(),
-                    _pdfRow("Grand Total", currency.format(grandTotal),
-                        bold: true),
-                  ]),
-                )
-              ]),
-              pw.SizedBox(height: 20),
-              pw.Center(
-                  child: pw.Text("Thank you for your purchase!",
-                      style: pw.TextStyle(fontSize: 14))),
+              pw.SizedBox(width: 12),
+              pw.Expanded(
+                flex: 1,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Text(
+                      'INVOICE',
+                      style: pw.TextStyle(
+                        fontSize: 24,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                    pw.SizedBox(height: 8),
+                    _kvRight('Invoice No:', invoiceNo),
+                    _kvRight('Date:', dateStr),
+                  ],
+                ),
+              ),
             ],
-          );
-        },
+          ),
+          pw.SizedBox(height: 16),
+
+          // ===== BILLED TO (template has it, we can keep generic) =====
+          pw.Container(
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: PdfColors.grey400),
+            ),
+            padding: const pw.EdgeInsets.all(8),
+            child: pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        'BILLED TO',
+                        style: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text('Cash Customer'),
+                    ],
+                  ),
+                ),
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        'YOUR COMPANY',
+                        style: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                      pw.Text(kShopName),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 16),
+
+          // ===== ITEMS TABLE (DESCRIPTION / UNIT COST / QTY / AMOUNT) =====
+          pw.TableHelper.fromTextArray(
+            headers: const ['DESCRIPTION', 'UNIT COST', 'QTY', 'AMOUNT'],
+            data: [
+              for (final it in items)
+                [
+                  it.name,
+                  formatCurrency(it.rate),
+                  it.qty.toString(),
+                  formatCurrency(it.amount),
+                ]
+            ],
+            headerStyle: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 10,
+            ),
+            cellStyle: const pw.TextStyle(fontSize: 9),
+            headerDecoration: const pw.BoxDecoration(
+              color: PdfColor.fromInt(0xFFE0E0E0),
+            ),
+            cellAlignment: pw.Alignment.centerLeft,
+            columnWidths: {
+              0: const pw.FlexColumnWidth(4),
+              1: const pw.FlexColumnWidth(2),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(2),
+            },
+          ),
+          pw.SizedBox(height: 16),
+
+          // ===== SUMMARY + BANK DETAILS =====
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              // Bank details (left)
+              pw.Expanded(
+                flex: 2,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      'BANK ACCOUNT DETAILS',
+                      style: pw.TextStyle(
+                        fontWeight: pw.FontWeight.bold,
+                        fontSize: 10,
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    if (kBankAccountHolder.isNotEmpty)
+                      pw.Text('Account holder: $kBankAccountHolder'),
+                    if (kBankName.isNotEmpty) pw.Text('Bank name: $kBankName'),
+                    if (kBankAccountNumber.isNotEmpty)
+                      pw.Text('Account number: $kBankAccountNumber'),
+                    if (kBankIfsc.isNotEmpty) pw.Text('IFSC code: $kBankIfsc'),
+                    if (kUpiId.isNotEmpty) pw.Text('UPI ID: $kUpiId'),
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 12),
+              // Summary (right)
+              pw.Expanded(
+                flex: 2,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                  children: [
+                    _kv('SUBTOTAL', formatCurrency(subTotal)),
+                    _kv('DISCOUNT', '- ${formatCurrency(discount)}'),
+                    _kv('TAX RATE', '${taxPercent.toStringAsFixed(2)}%'),
+                    _kv('TAX', formatCurrency(taxAmount)),
+                    pw.Divider(),
+                    _kv(
+                      'INVOICE TOTAL',
+                      formatCurrency(grandTotal),
+                      bold: true,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 24),
+
+          // ===== DIGITAL SIGNATURE =====
+          if (kIncludeDigitalSignature) ...[
+            pw.Row(
+              children: [
+                pw.Spacer(),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    pw.Text('For $kShopName'),
+                    pw.SizedBox(height: 32),
+                    pw.Text(
+                      'Authorised Signatory',
+                      style: pw.TextStyle(fontSize: 10),
+                    ),
+                    pw.Text(
+                      '(Digitally Signed)',
+                      style: pw.TextStyle(
+                        fontSize: 8,
+                        fontStyle: pw.FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            pw.SizedBox(height: 16),
+          ],
+
+          // ===== FOOTER / TERMS =====
+          pw.Divider(),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            'TERMS',
+            style: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 10,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          if (kFooterLine1.isNotEmpty)
+            pw.Text(
+              kFooterLine1,
+              style: const pw.TextStyle(fontSize: 9),
+            ),
+          if (kFooterLine2.isNotEmpty)
+            pw.Text(
+              kFooterLine2,
+              style: const pw.TextStyle(fontSize: 9),
+            ),
+        ],
       ),
     );
 
     return doc.save();
   }
 
-  pw.Widget _pdfRow(String label, String value, {bool bold = false}) {
-    return pw.Row(
-      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-      children: [
-        pw.Text(label),
-        pw.Text(value,
-            style: pw.TextStyle(
-                fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal)),
-      ],
-    );
-  }
-
   pw.Widget _kv(String label, String value, {bool bold = false}) {
     return pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
       children: [
-        pw.Text(label),
+        pw.Text(
+          label,
+          style: pw.TextStyle(
+            fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+          ),
+        ),
         pw.Text(
           value,
           style: pw.TextStyle(
@@ -252,9 +462,19 @@ class _WebPosScreenState extends State<WebPosScreen> {
     );
   }
 
+  pw.Widget _kvRight(String label, String value) {
+    return pw.Row(
+      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+      children: [
+        pw.Text(label, style: const pw.TextStyle(fontSize: 9)),
+        pw.Text(value, style: const pw.TextStyle(fontSize: 9)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final seed = const Color(0xFF8EA394);
+    const seed = Color(0xFF8EA394);
 
     return Scaffold(
       appBar: AppBar(
@@ -264,6 +484,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
       ),
       body: Row(
         children: [
+          // LEFT: Item entry
           Expanded(
             flex: 5,
             child: Padding(
@@ -292,7 +513,8 @@ class _WebPosScreenState extends State<WebPosScreen> {
                         _rateCtrl,
                         width: 120,
                         keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
+                          decimal: true,
+                        ),
                       ),
                       FilledButton.icon(
                         onPressed: _addItem,
@@ -318,12 +540,12 @@ class _WebPosScreenState extends State<WebPosScreen> {
                               ),
                             ),
                             subtitle: Text(
-                              'Qty ${it.qty} × ₹${it.rate.toStringAsFixed(2)}',
+                              'Qty ${it.qty} × ${formatCurrency(it.rate)}',
                             ),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text('₹${it.amount.toStringAsFixed(2)}'),
+                                Text(formatCurrency(it.amount)),
                                 IconButton(
                                   icon: const Icon(Icons.delete_outline),
                                   onPressed: () {
@@ -343,10 +565,12 @@ class _WebPosScreenState extends State<WebPosScreen> {
               ),
             ),
           ),
+          // Divider
           Container(
             width: 1,
             color: Theme.of(context).dividerColor,
           ),
+          // RIGHT: Summary
           Expanded(
             flex: 3,
             child: Padding(
@@ -368,7 +592,8 @@ class _WebPosScreenState extends State<WebPosScreen> {
                           'Discount (₹)',
                           _discountCtrl,
                           keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true),
+                            decimal: true,
+                          ),
                           onChanged: (_) => setState(() {}),
                         ),
                       ),
@@ -378,7 +603,8 @@ class _WebPosScreenState extends State<WebPosScreen> {
                           'Tax %',
                           _taxPctCtrl,
                           keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true),
+                            decimal: true,
+                          ),
                           onChanged: (_) => setState(() {}),
                         ),
                       ),
@@ -398,7 +624,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
                   if (kIsWeb)
                     const Text(
                       'Running in Chrome/Web mode.\n'
-                      'Each bill will download Billing_Record.xlsx.',
+                      'Each bill downloads Billing_Record.xlsx (updated).',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 12),
                     ),
@@ -429,7 +655,12 @@ class _WebPosScreenState extends State<WebPosScreen> {
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
+          filled: true,
+          fillColor: const Color(0xFFF4F6F4),
         ),
+        onSubmitted: (_) {
+          if (label == 'Rate') _addItem();
+        },
       ),
     );
   }
@@ -452,7 +683,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
         ),
         Text(
-          '₹${value.toStringAsFixed(2)}',
+          formatCurrency(value),
           style: TextStyle(
             fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
             fontSize: big ? 20 : 14,
