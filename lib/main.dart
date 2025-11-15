@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:power_house_billing_app/screens/client_list_screen.dart';
 import 'package:power_house_billing_app/screens/dashboard_screen.dart';
@@ -5,6 +6,7 @@ import 'package:power_house_billing_app/screens/invoice_edit_screen.dart';
 import 'package:power_house_billing_app/screens/invoice_list_screen.dart';
 import 'package:power_house_billing_app/screens/record_payment_screen.dart';
 import 'package:power_house_billing_app/screens/settings_screen.dart';
+import 'package:power_house_billing_app/screens/web_pos_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,9 +19,10 @@ class InvoiceApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const seed = Color(0xFF8EA394);
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Invoico',
+      title: 'Power House Billing',
       theme: ThemeData(
         colorScheme:
             ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light),
@@ -29,7 +32,7 @@ class InvoiceApp extends StatelessWidget {
           margin: EdgeInsets.symmetric(vertical: 8, horizontal: 16),
           surfaceTintColor: Colors.transparent,
         ),
-        inputDecorationTheme: InputDecorationTheme(
+        inputDecorationTheme: const InputDecorationTheme(
           filled: true,
           fillColor: Color(0xFFF4F6F4),
           border: OutlineInputBorder(
@@ -48,13 +51,19 @@ class InvoiceApp extends StatelessWidget {
         ),
         listTileTheme: const ListTileThemeData(iconColor: Colors.black87),
       ),
+      // If running on web (Chrome), show POS-style web screen as home.
+      // Otherwise use your normal dashboard.
+      initialRoute: '/',
       routes: {
-        '/': (_) => const DashboardScreen(),
+        '/': (_) => kIsWeb ? const WebPosScreen() : const DashboardScreen(),
         '/invoices': (_) => const InvoiceListScreen(),
         '/invoice/new': (_) => const InvoiceEditScreen(),
         '/clients': (_) => const ClientListScreen(),
         '/record': (_) => const RecordPaymentScreen(),
         '/settings': (_) => const SettingsScreen(),
+
+        // Direct route if you ever want to open POS from mobile too:
+        '/pos': (_) => const WebPosScreen(),
       },
     );
   }
