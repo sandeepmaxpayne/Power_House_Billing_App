@@ -19,10 +19,9 @@ class InvoiceApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const seed = Color(0xFF8EA394);
-
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Power House Billing',
+      title: 'Invoico',
       theme: ThemeData(
         colorScheme:
             ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light),
@@ -51,10 +50,8 @@ class InvoiceApp extends StatelessWidget {
         ),
         listTileTheme: const ListTileThemeData(iconColor: Colors.black87),
       ),
-      // If running on web (Chrome), show POS-style web screen as home.
-      // Otherwise use your normal dashboard.
-      initialRoute: '/',
       routes: {
+        // On web (Chrome) route root to POS screen, otherwise dashboard
         '/': (_) => kIsWeb ? const WebPosScreen() : const DashboardScreen(),
         '/invoices': (_) => const InvoiceListScreen(),
         '/invoice/new': (_) => const InvoiceEditScreen(),
@@ -62,8 +59,8 @@ class InvoiceApp extends StatelessWidget {
         '/record': (_) => const RecordPaymentScreen(),
         '/settings': (_) => const SettingsScreen(),
 
-        // Direct route if you ever want to open POS from mobile too:
-        '/pos': (_) => const WebPosScreen(),
+        // Explicit POS route if you ever want to open it from menus
+        '/pos/web': (_) => const WebPosScreen(),
       },
     );
   }
