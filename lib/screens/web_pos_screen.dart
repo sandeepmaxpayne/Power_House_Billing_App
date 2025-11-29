@@ -8,7 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../services/billing_excel.dart';
+import '../services/billing_db.dart';
 
 /// ====== BUSINESS & INVOICE SETTINGS ======
 
@@ -31,7 +31,7 @@ const String kInvoicePrefix = 'BZ-';
 
 const bool kIncludeDigitalSignature = true;
 
-// Footer lines – you can edit these
+// Footer lines
 const String kFooterLine1 = 'This is a computer generated invoice.';
 const String kFooterLine2 = 'Thank you for your business.';
 
@@ -65,6 +65,10 @@ class WebPosScreen extends StatefulWidget {
 }
 
 class _WebPosScreenState extends State<WebPosScreen> {
+  // NEW: customer fields
+  final _customerNameCtrl = TextEditingController();
+  final _customerPhoneCtrl = TextEditingController();
+
   final _nameCtrl = TextEditingController();
   final _qtyCtrl = TextEditingController(text: '1');
   final _rateCtrl = TextEditingController();
@@ -106,6 +110,8 @@ class _WebPosScreenState extends State<WebPosScreen> {
 
   @override
   void dispose() {
+    _customerNameCtrl.dispose();
+    _customerPhoneCtrl.dispose();
     _nameCtrl.dispose();
     _qtyCtrl.dispose();
     _rateCtrl.dispose();
@@ -130,6 +136,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
     });
   }
 
+  /// Save invoice & items to SQLite + print PDF
   Future<void> _printAndSave() async {
     if (_items.isEmpty) return;
 
@@ -138,27 +145,29 @@ class _WebPosScreenState extends State<WebPosScreen> {
     final invoiceNo =
         '$kInvoicePrefix$datePart-${_invoiceCounter.toString().padLeft(3, '0')}';
 
-    // --- SAVE TO EXCEL (Web / Android / Windows) ---
-    await logInvoiceToExcel(
-      invoiceNumber: invoiceNo,
-      date: now,
-      lines: [
-        for (final it in _items)
-          ExcelInvoiceLine(
-            name: it.name,
-            qty: it.qty,
-            rate: it.rate,
-            amount: it.amount,
-          )
-      ],
-      subTotal: subTotal,
-      discount: discount,
-      taxPercent: taxPercent,
-      taxAmount: taxAmount,
-      grandTotal: grandTotal,
-    );
+    final customerName = _customerNameCtrl.text.trim();
+    final customerPhone = _customerPhoneCtrl.text.trim();
 
-    // --- GENERATE PDF & PRINT (A4) ---
+    // 1) Save to SQLite (schema unchanged – customer fields not stored yet)
+    await BillingDb.instance.insertInvoiceWithLines(
+        invoiceNo: invoiceNo,
+        date: now,
+        subTotal: subTotal,
+        discount: discount,
+        taxPercent: taxPercent,
+        taxAmount: taxAmount,
+        grandTotal: grandTotal,
+        lines: [
+          for (final it in _items)
+            InvoiceLineInsert(
+              name: it.name,
+              qty: it.qty,
+              rate: it.rate,
+              amount: it.amount,
+            ),
+        ]);
+
+    // 2) Build & print PDF
     final pdfBytes = await _buildPdf(
       invoiceNo: invoiceNo,
       date: now,
@@ -168,25 +177,52 @@ class _WebPosScreenState extends State<WebPosScreen> {
       taxPercent: taxPercent,
       taxAmount: taxAmount,
       grandTotal: grandTotal,
+      customerName: customerName,
+      customerPhone: customerPhone,
     );
 
-    // Chrome/desktop print dialog will allow "Save as PDF" as well
     final copies = kPrintTwoCopies ? 2 : 1;
     for (int i = 0; i < copies; i++) {
       await Printing.layoutPdf(onLayout: (format) async => pdfBytes);
     }
 
+    // RESET after print
     setState(() {
       _invoiceCounter++;
-      _items.clear(); // reset bill after printing
+      _items.clear();
+      _nameCtrl.clear();
+      _qtyCtrl.text = '1';
+      _rateCtrl.clear();
+      _discountCtrl.text = '0';
+      _taxPctCtrl.text = '0';
+      _customerNameCtrl.clear();
+      _customerPhoneCtrl.clear();
     });
     await _saveCounter();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Bill printed & Billing_Record.xlsx saved.'),
+          content: Text('Bill printed & stored in local history.'),
         ),
+      );
+    }
+  }
+
+  /// Export full history from SQLite → Billing_Record.xlsx
+  Future<void> _downloadHistoryExcel() async {
+    final exported = await exportHistoryToExcel();
+    if (!mounted) return;
+
+    if (exported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Billing_Record.xlsx downloaded/exported.'),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No records found to export.')),
       );
     }
   }
@@ -200,6 +236,8 @@ class _WebPosScreenState extends State<WebPosScreen> {
     required double taxPercent,
     required double taxAmount,
     required double grandTotal,
+    required String customerName,
+    required String customerPhone,
   }) async {
     final doc = pw.Document();
     final dateStr = DateFormat('dd/MM/yyyy').format(date);
@@ -209,7 +247,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(24),
         build: (context) => [
-          // ===== HEADER: LEFT BUSINESS, RIGHT INVOICE =====
+          // HEADER
           pw.Row(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
@@ -258,7 +296,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
           pw.SizedBox(height: 16),
 
-          // ===== BILLED TO (template has it, we can keep generic) =====
+          // BILLED TO (uses customer name + phone)
           pw.Container(
             decoration: pw.BoxDecoration(
               border: pw.Border.all(color: PdfColors.grey400),
@@ -279,7 +317,10 @@ class _WebPosScreenState extends State<WebPosScreen> {
                         ),
                       ),
                       pw.SizedBox(height: 4),
-                      pw.Text('Cash Customer'),
+                      pw.Text(
+                        customerName.isEmpty ? 'Cash Customer' : customerName,
+                      ),
+                      if (customerPhone.isNotEmpty) pw.Text(customerPhone),
                     ],
                   ),
                 ),
@@ -304,7 +345,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
           pw.SizedBox(height: 16),
 
-          // ===== ITEMS TABLE (DESCRIPTION / UNIT COST / QTY / AMOUNT) =====
+          // ITEMS TABLE
           pw.TableHelper.fromTextArray(
             headers: const ['DESCRIPTION', 'UNIT COST', 'QTY', 'AMOUNT'],
             data: [
@@ -334,11 +375,10 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
           pw.SizedBox(height: 16),
 
-          // ===== SUMMARY + BANK DETAILS =====
+          // SUMMARY + BANK DETAILS
           pw.Row(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              // Bank details (left)
               pw.Expanded(
                 flex: 2,
                 child: pw.Column(
@@ -363,7 +403,6 @@ class _WebPosScreenState extends State<WebPosScreen> {
                 ),
               ),
               pw.SizedBox(width: 12),
-              // Summary (right)
               pw.Expanded(
                 flex: 2,
                 child: pw.Column(
@@ -386,7 +425,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
           pw.SizedBox(height: 24),
 
-          // ===== DIGITAL SIGNATURE =====
+          // DIGITAL SIGNATURE
           if (kIncludeDigitalSignature) ...[
             pw.Row(
               children: [
@@ -414,7 +453,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
             pw.SizedBox(height: 16),
           ],
 
-          // ===== FOOTER / TERMS =====
+          // FOOTER
           pw.Divider(),
           pw.SizedBox(height: 4),
           pw.Text(
@@ -426,15 +465,9 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
           pw.SizedBox(height: 4),
           if (kFooterLine1.isNotEmpty)
-            pw.Text(
-              kFooterLine1,
-              style: const pw.TextStyle(fontSize: 9),
-            ),
+            pw.Text(kFooterLine1, style: const pw.TextStyle(fontSize: 9)),
           if (kFooterLine2.isNotEmpty)
-            pw.Text(
-              kFooterLine2,
-              style: const pw.TextStyle(fontSize: 9),
-            ),
+            pw.Text(kFooterLine2, style: const pw.TextStyle(fontSize: 9)),
         ],
       ),
     );
@@ -492,6 +525,31 @@ class _WebPosScreenState extends State<WebPosScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // NEW: customer fields row
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: _field(
+                          'Customer Name',
+                          _customerNameCtrl,
+                          textInputAction: TextInputAction.next,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: _field(
+                          'Customer Phone',
+                          _customerPhoneCtrl,
+                          keyboardType: TextInputType.phone,
+                          textInputAction: TextInputAction.next,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  // Item fields
                   Wrap(
                     spacing: 12,
                     runSpacing: 12,
@@ -618,13 +676,19 @@ class _WebPosScreenState extends State<WebPosScreen> {
                   FilledButton.icon(
                     onPressed: _items.isEmpty ? null : _printAndSave,
                     icon: const Icon(Icons.print),
-                    label: const Text('Print Bill & Save Excel'),
+                    label: const Text('Print Bill & Save (SQLite)'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _downloadHistoryExcel,
+                    icon: const Icon(Icons.download),
+                    label: const Text('Download Excel History'),
                   ),
                   const SizedBox(height: 8),
                   if (kIsWeb)
                     const Text(
                       'Running in Chrome/Web mode.\n'
-                      'Each bill downloads Billing_Record.xlsx (updated).',
+                      'History is stored in local SQLite; Excel is generated from it.',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 12),
                     ),

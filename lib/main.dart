@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:power_house_billing_app/screens/client_list_screen.dart';
@@ -7,9 +9,25 @@ import 'package:power_house_billing_app/screens/invoice_list_screen.dart';
 import 'package:power_house_billing_app/screens/record_payment_screen.dart';
 import 'package:power_house_billing_app/screens/settings_screen.dart';
 import 'package:power_house_billing_app/screens/web_pos_screen.dart';
+import 'package:sqflite/sqflite.dart' as sqflite;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (kIsWeb) {
+    // Use FFI web factory (uses web worker + IndexedDB)
+    databaseFactory = databaseFactoryFfiWeb;
+  } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    // Desktop – use FFI
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  } else {
+    // Android / iOS – normal sqflite
+    databaseFactory = sqflite.databaseFactory;
+  }
+
   runApp(const InvoiceApp());
 }
 

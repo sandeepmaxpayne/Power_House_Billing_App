@@ -18,6 +18,9 @@ dependencies:
   excel: ^4.0.6
   file_saver: ^0.3.1
   shared_preferences: ^2.5.3
+  sqflite_common_ffi: ^2.3.0
+  sqflite_common_ffi_web: ^0.4.0
+  google_fonts: ^6.3.2
 
 flutter:
   uses-material-design: true
