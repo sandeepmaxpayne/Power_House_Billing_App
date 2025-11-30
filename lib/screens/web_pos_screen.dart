@@ -1,7 +1,8 @@
-// lib/screens/web_pos_screen.dart
-
+import 'package:file_saver/file_saver.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -65,16 +66,20 @@ class WebPosScreen extends StatefulWidget {
 }
 
 class _WebPosScreenState extends State<WebPosScreen> {
-  // NEW: customer fields
+  // Customer fields
   final _customerNameCtrl = TextEditingController();
   final _customerPhoneCtrl = TextEditingController();
 
+  // Item fields
   final _nameCtrl = TextEditingController();
   final _qtyCtrl = TextEditingController(text: '1');
   final _rateCtrl = TextEditingController();
 
+  // Summary fields
   final _discountCtrl = TextEditingController(text: '0');
   final _taxPctCtrl = TextEditingController(text: '0');
+
+  final _formKey = GlobalKey<FormState>();
 
   final List<PosItem> _items = [];
   int _invoiceCounter = 1;
@@ -136,8 +141,16 @@ class _WebPosScreenState extends State<WebPosScreen> {
     });
   }
 
-  /// Save invoice & items to SQLite + print PDF
+  /// Save invoice & items to SQLite + save PDF + print
   Future<void> _printAndSave() async {
+    // Validate phone + other form validators
+    if (!_formKey.currentState!.validate()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fix validation errors.')),
+      );
+      return;
+    }
+
     if (_items.isEmpty) return;
 
     final now = DateTime.now();
@@ -148,26 +161,27 @@ class _WebPosScreenState extends State<WebPosScreen> {
     final customerName = _customerNameCtrl.text.trim();
     final customerPhone = _customerPhoneCtrl.text.trim();
 
-    // 1) Save to SQLite (schema unchanged – customer fields not stored yet)
+    // 1) Save to SQLite
     await BillingDb.instance.insertInvoiceWithLines(
-        invoiceNo: invoiceNo,
-        date: now,
-        subTotal: subTotal,
-        discount: discount,
-        taxPercent: taxPercent,
-        taxAmount: taxAmount,
-        grandTotal: grandTotal,
-        lines: [
-          for (final it in _items)
-            InvoiceLineInsert(
-              name: it.name,
-              qty: it.qty,
-              rate: it.rate,
-              amount: it.amount,
-            ),
-        ]);
+      invoiceNo: invoiceNo,
+      date: now,
+      subTotal: subTotal,
+      discount: discount,
+      taxPercent: taxPercent,
+      taxAmount: taxAmount,
+      grandTotal: grandTotal,
+      lines: [
+        for (final it in _items)
+          InvoiceLineInsert(
+            name: it.name,
+            qty: it.qty,
+            rate: it.rate,
+            amount: it.amount,
+          ),
+      ],
+    );
 
-    // 2) Build & print PDF
+    // 2) Build PDF
     final pdfBytes = await _buildPdf(
       invoiceNo: invoiceNo,
       date: now,
@@ -181,29 +195,38 @@ class _WebPosScreenState extends State<WebPosScreen> {
       customerPhone: customerPhone,
     );
 
+    // 2a) Save PDF as <invoiceNo>.pdf (web uses FileSaver)
+    if (kIsWeb) {
+      await FileSaver.instance.saveFile(
+        name: invoiceNo,
+        bytes: pdfBytes,
+        fileExtension: 'pdf',
+        mimeType: MimeType.pdf,
+      );
+    }
+
+    // 2b) Print (Chrome print dialog – user can also Save as PDF there)
     final copies = kPrintTwoCopies ? 2 : 1;
     for (int i = 0; i < copies; i++) {
       await Printing.layoutPdf(onLayout: (format) async => pdfBytes);
     }
 
-    // RESET after print
+    // 3) Reset state
     setState(() {
       _invoiceCounter++;
       _items.clear();
-      _nameCtrl.clear();
-      _qtyCtrl.text = '1';
-      _rateCtrl.clear();
-      _discountCtrl.text = '0';
-      _taxPctCtrl.text = '0';
       _customerNameCtrl.clear();
       _customerPhoneCtrl.clear();
+      _discountCtrl.text = '0';
+      _taxPctCtrl.text = '0';
     });
     await _saveCounter();
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Bill printed & stored in local history.'),
+          content:
+              Text('Bill printed, saved as PDF & stored in local history.'),
         ),
       );
     }
@@ -239,8 +262,25 @@ class _WebPosScreenState extends State<WebPosScreen> {
     required String customerName,
     required String customerPhone,
   }) async {
-    final doc = pw.Document();
+    // Load Roboto from assets (supports ₹). Make sure paths match pubspec.yaml.
+    final robotoRegular = pw.Font.ttf(
+      await rootBundle.load('fonts/Roboto-Regular.ttf'),
+    );
+    final robotoBold = pw.Font.ttf(
+      await rootBundle.load('fonts/Roboto-Bold.ttf'),
+    );
+
+    final doc = pw.Document(
+      theme: pw.ThemeData.withFont(
+        base: robotoRegular,
+        bold: robotoBold,
+      ),
+    );
+
     final dateStr = DateFormat('dd/MM/yyyy').format(date);
+
+    final billedName = customerName.isEmpty ? 'Cash Customer' : customerName;
+    final billedPhone = customerPhone;
 
     doc.addPage(
       pw.MultiPage(
@@ -296,7 +336,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
           ),
           pw.SizedBox(height: 16),
 
-          // BILLED TO (uses customer name + phone)
+          // BILLED TO
           pw.Container(
             decoration: pw.BoxDecoration(
               border: pw.Border.all(color: PdfColors.grey400),
@@ -317,10 +357,9 @@ class _WebPosScreenState extends State<WebPosScreen> {
                         ),
                       ),
                       pw.SizedBox(height: 4),
-                      pw.Text(
-                        customerName.isEmpty ? 'Cash Customer' : customerName,
-                      ),
-                      if (customerPhone.isNotEmpty) pw.Text(customerPhone),
+                      pw.Text(billedName),
+                      if (billedPhone.isNotEmpty)
+                        pw.Text('Phone: $billedPhone'),
                     ],
                   ),
                 ),
@@ -362,7 +401,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
               fontSize: 10,
             ),
             cellStyle: const pw.TextStyle(fontSize: 9),
-            headerDecoration: const pw.BoxDecoration(
+            headerDecoration: pw.BoxDecoration(
               color: PdfColor.fromInt(0xFFE0E0E0),
             ),
             cellAlignment: pw.Alignment.centerLeft,
@@ -437,7 +476,7 @@ class _WebPosScreenState extends State<WebPosScreen> {
                     pw.SizedBox(height: 32),
                     pw.Text(
                       'Authorised Signatory',
-                      style: pw.TextStyle(fontSize: 10),
+                      style: const pw.TextStyle(fontSize: 10),
                     ),
                     pw.Text(
                       '(Digitally Signed)',
@@ -515,188 +554,208 @@ class _WebPosScreenState extends State<WebPosScreen> {
         backgroundColor: seed,
         foregroundColor: Colors.white,
       ),
-      body: Row(
-        children: [
-          // LEFT: Item entry
-          Expanded(
-            flex: 5,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // NEW: customer fields row
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: _field(
-                          'Customer Name',
-                          _customerNameCtrl,
-                          textInputAction: TextInputAction.next,
+      body: Form(
+        key: _formKey,
+        child: Row(
+          children: [
+            // LEFT: Customer + Item entry
+            Expanded(
+              flex: 5,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Customer fields
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _field(
+                            'Customer Name',
+                            _customerNameCtrl,
+                            textInputAction: TextInputAction.next,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        flex: 2,
-                        child: _field(
-                          'Customer Phone',
-                          _customerPhoneCtrl,
-                          keyboardType: TextInputType.phone,
-                          textInputAction: TextInputAction.next,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  // Item fields
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      _field(
-                        'Item',
-                        _nameCtrl,
-                        width: 260,
-                        textInputAction: TextInputAction.next,
-                      ),
-                      _field(
-                        'Qty',
-                        _qtyCtrl,
-                        width: 80,
-                        keyboardType: TextInputType.number,
-                      ),
-                      _field(
-                        'Rate',
-                        _rateCtrl,
-                        width: 120,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                      ),
-                      FilledButton.icon(
-                        onPressed: _addItem,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: Card(
-                      child: ListView.separated(
-                        itemCount: _items.length,
-                        separatorBuilder: (_, __) =>
-                            const Divider(height: 1, thickness: 0.5),
-                        itemBuilder: (context, index) {
-                          final it = _items[index];
-                          return ListTile(
-                            title: Text(
-                              it.name,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SizedBox(
+                            width: 260,
+                            child: TextFormField(
+                              controller: _customerPhoneCtrl,
+                              keyboardType: TextInputType.phone,
+                              textInputAction: TextInputAction.next,
+                              maxLength: 10,
+                              style: GoogleFonts.roboto(),
+                              decoration: const InputDecoration(
+                                counterText: "",
+                                labelText: 'Customer Phone',
+                                border: OutlineInputBorder(),
+                                filled: true,
+                                fillColor: Color(0xFFF4F6F4),
                               ),
+                              validator: (value) {
+                                final v = value?.trim() ?? '';
+                                if (v.isEmpty) return null; // optional
+                                if (!RegExp(r'^[0-9]{10}$').hasMatch(v)) {
+                                  return 'Enter a valid 10-digit number';
+                                }
+                                return null;
+                              },
                             ),
-                            subtitle: Text(
-                              'Qty ${it.qty} × ${formatCurrency(it.rate)}',
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(formatCurrency(it.amount)),
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline),
-                                  onPressed: () {
-                                    setState(() {
-                                      _items.removeAt(index);
-                                    });
-                                  },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Item fields
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        _field(
+                          'Item',
+                          _nameCtrl,
+                          width: 260,
+                          textInputAction: TextInputAction.next,
+                        ),
+                        _field(
+                          'Qty',
+                          _qtyCtrl,
+                          width: 80,
+                          keyboardType: TextInputType.number,
+                        ),
+                        _field(
+                          'Rate',
+                          _rateCtrl,
+                          width: 120,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                        ),
+                        FilledButton.icon(
+                          onPressed: _addItem,
+                          icon: const Icon(Icons.add),
+                          label: const Text('Add'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: Card(
+                        child: ListView.separated(
+                          itemCount: _items.length,
+                          separatorBuilder: (_, __) =>
+                              const Divider(height: 1, thickness: 0.5),
+                          itemBuilder: (context, index) {
+                            final it = _items[index];
+                            return ListTile(
+                              title: Text(
+                                it.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
                                 ),
-                              ],
+                              ),
+                              subtitle: Text(
+                                'Qty ${it.qty} × ${formatCurrency(it.rate)}',
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(formatCurrency(it.amount)),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: () {
+                                      setState(() {
+                                        _items.removeAt(index);
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Divider
+            Container(
+              width: 1,
+              color: Theme.of(context).dividerColor,
+            ),
+            // RIGHT: Summary
+            Expanded(
+              flex: 3,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Summary',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    _moneyRow('Subtotal', subTotal),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _field(
+                            'Discount (₹)',
+                            _discountCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
                             ),
-                          );
-                        },
-                      ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _field(
+                            'Tax %',
+                            _taxPctCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    _moneyRow('Tax Amount', taxAmount),
+                    const Divider(height: 24),
+                    _moneyRow('Grand Total', grandTotal, bold: true, big: true),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: _items.isEmpty ? null : _printAndSave,
+                      icon: const Icon(Icons.print),
+                      label: const Text('Print Bill & Save (SQLite + PDF)'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _downloadHistoryExcel,
+                      icon: const Icon(Icons.download),
+                      label: const Text('Download Excel History'),
+                    ),
+                    const SizedBox(height: 8),
+                    if (kIsWeb)
+                      const Text(
+                        'Running in Chrome/Web mode.\n'
+                        'History is stored in local SQLite; Excel & PDFs are generated from it.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-          // Divider
-          Container(
-            width: 1,
-            color: Theme.of(context).dividerColor,
-          ),
-          // RIGHT: Summary
-          Expanded(
-            flex: 3,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Summary',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  _moneyRow('Subtotal', subTotal),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _field(
-                          'Discount (₹)',
-                          _discountCtrl,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          onChanged: (_) => setState(() {}),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _field(
-                          'Tax %',
-                          _taxPctCtrl,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          onChanged: (_) => setState(() {}),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _moneyRow('Tax Amount', taxAmount),
-                  const Divider(height: 24),
-                  _moneyRow('Grand Total', grandTotal, bold: true, big: true),
-                  const Spacer(),
-                  FilledButton.icon(
-                    onPressed: _items.isEmpty ? null : _printAndSave,
-                    icon: const Icon(Icons.print),
-                    label: const Text('Print Bill & Save (SQLite)'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _downloadHistoryExcel,
-                    icon: const Icon(Icons.download),
-                    label: const Text('Download Excel History'),
-                  ),
-                  const SizedBox(height: 8),
-                  if (kIsWeb)
-                    const Text(
-                      'Running in Chrome/Web mode.\n'
-                      'History is stored in local SQLite; Excel is generated from it.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -716,12 +775,11 @@ class _WebPosScreenState extends State<WebPosScreen> {
         keyboardType: keyboardType,
         textInputAction: textInputAction,
         onChanged: onChanged,
-        decoration: InputDecoration(
-          labelText: label,
-          border: const OutlineInputBorder(),
+        decoration: const InputDecoration(
+          border: OutlineInputBorder(),
           filled: true,
-          fillColor: const Color(0xFFF4F6F4),
-        ),
+          fillColor: Color(0xFFF4F6F4),
+        ).copyWith(labelText: label),
         onSubmitted: (_) {
           if (label == 'Rate') _addItem();
         },

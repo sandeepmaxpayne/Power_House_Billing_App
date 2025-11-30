@@ -1,4 +1,3 @@
-
 name: power_house_billing_app
 description: Flutter invoice app with local SQLite CRUD and PDF export/print
 publish_to: 'none'
@@ -24,3 +23,7 @@ dependencies:
 
 flutter:
   uses-material-design: true
+
+assets:
+  - fonts/Roboto-Regular.ttf
+  - fonts/Roboto-Bold.ttf
